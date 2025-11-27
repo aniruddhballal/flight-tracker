@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import L from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 
@@ -23,11 +23,20 @@ interface FlightMarkerData {
   track: Array<[number, number]>;
 }
 
+interface UserLocationData {
+  marker: L.Marker | null;
+  circle: L.Circle | null;
+}
+
 const FlightMap: React.FC<FlightMapProps> = ({ flights, cityName, cityCoords }) => {
   const mapRef = useRef<L.Map | null>(null);
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const flightMarkersRef = useRef<Map<string, FlightMarkerData>>(new Map());
   const mapInitializedRef = useRef<boolean>(false);
+  const userLocationRef = useRef<UserLocationData>({ marker: null, circle: null });
+  const watchIdRef = useRef<number | null>(null);
+  const currentHeadingRef = useRef<number>(0);
+  const [locationEnabled, setLocationEnabled] = useState(false);
 
   // Create custom airplane icon
   const createPlaneIcon = (heading: number) => {
@@ -46,6 +55,156 @@ const FlightMap: React.FC<FlightMapProps> = ({ flights, cityName, cityCoords }) 
       iconSize: [32, 32],
       iconAnchor: [16, 16],
     });
+  };
+
+  // Create user location icon with direction arrow
+  const createUserIcon = (heading: number) => {
+    const svgIcon = `
+      <svg width="40" height="40" viewBox="0 0 40 40" xmlns="http://www.w3.org/2000/svg">
+        <g transform="translate(20,20) rotate(${heading}) translate(-20,-20)">
+          <!-- Outer circle -->
+          <circle cx="20" cy="20" r="10" fill="#3B82F6" stroke="white" stroke-width="3" opacity="0.9"/>
+          <!-- Direction arrow -->
+          <path d="M20 8 L25 20 L20 17 L15 20 Z" fill="white" stroke="white" stroke-width="1"/>
+        </g>
+      </svg>
+    `;
+    
+    return L.divIcon({
+      html: svgIcon,
+      className: 'custom-user-icon',
+      iconSize: [40, 40],
+      iconAnchor: [20, 20],
+    });
+  };
+
+  // Update user location marker
+  const updateUserLocation = (lat: number, lon: number, accuracy: number) => {
+    if (!mapRef.current) return;
+
+    const position: [number, number] = [lat, lon];
+
+    if (userLocationRef.current.marker) {
+      // Update existing marker
+      userLocationRef.current.marker.setLatLng(position);
+      userLocationRef.current.marker.setIcon(createUserIcon(currentHeadingRef.current));
+      
+      if (userLocationRef.current.circle) {
+        userLocationRef.current.circle.setLatLng(position);
+        userLocationRef.current.circle.setRadius(accuracy);
+      }
+    } else {
+      // Create new marker
+      const marker = L.marker(position, { 
+        icon: createUserIcon(currentHeadingRef.current),
+        zIndexOffset: 2000 
+      })
+        .addTo(mapRef.current)
+        .bindPopup(`
+          <div style="font-family: sans-serif;">
+            <b style="font-size: 14px; color: #1f2937;">Your Location</b><br/>
+            <span style="color: #6b7280; font-size: 12px;">Lat: ${lat.toFixed(5)}</span><br/>
+            <span style="color: #6b7280; font-size: 12px;">Lon: ${lon.toFixed(5)}</span><br/>
+            <span style="color: #6b7280; font-size: 12px;">Accuracy: ±${accuracy.toFixed(0)}m</span>
+          </div>
+        `);
+
+      const circle = L.circle(position, {
+        radius: accuracy,
+        color: '#3B82F6',
+        fillColor: '#3B82F6',
+        fillOpacity: 0.1,
+        weight: 2,
+        interactive: false,
+      }).addTo(mapRef.current);
+
+      userLocationRef.current = { marker, circle };
+    }
+  };
+
+  // Handle device orientation
+  const handleOrientation = (event: DeviceOrientationEvent) => {
+    let heading = 0;
+
+    // Type assertion for webkit property (iOS)
+    const webkitEvent = event as any;
+    if (webkitEvent.webkitCompassHeading !== undefined) {
+      // iOS
+      heading = webkitEvent.webkitCompassHeading;
+    } else if (event.alpha !== null) {
+      // Android
+      heading = 360 - event.alpha;
+    }
+
+    currentHeadingRef.current = heading;
+
+    // Update user marker icon with new heading
+    if (userLocationRef.current.marker) {
+      userLocationRef.current.marker.setIcon(createUserIcon(heading));
+    }
+  };
+
+  // Start tracking user location
+  const startLocationTracking = () => {
+    if (!navigator.geolocation) {
+      console.log('Geolocation not supported');
+      return;
+    }
+
+    watchIdRef.current = navigator.geolocation.watchPosition(
+      (position) => {
+        const { latitude, longitude, accuracy } = position.coords;
+        updateUserLocation(latitude, longitude, accuracy);
+        setLocationEnabled(true);
+      },
+      (error) => {
+        console.error('Location error:', error);
+      },
+      {
+        enableHighAccuracy: true,
+        maximumAge: 0,
+        timeout: 5000,
+      }
+    );
+
+    // Request device orientation
+    if (typeof DeviceOrientationEvent !== 'undefined') {
+      // Check if permission is needed (iOS 13+)
+      if (typeof (DeviceOrientationEvent as any).requestPermission === 'function') {
+        (DeviceOrientationEvent as any).requestPermission()
+          .then((response: string) => {
+            if (response === 'granted') {
+              window.addEventListener('deviceorientation', handleOrientation);
+            }
+          })
+          .catch(console.error);
+      } else {
+        // For Android and older iOS
+        window.addEventListener('deviceorientation', handleOrientation);
+      }
+    }
+  };
+
+  // Stop tracking user location
+  const stopLocationTracking = () => {
+    if (watchIdRef.current !== null) {
+      navigator.geolocation.clearWatch(watchIdRef.current);
+      watchIdRef.current = null;
+    }
+
+    window.removeEventListener('deviceorientation', handleOrientation);
+
+    if (userLocationRef.current.marker) {
+      userLocationRef.current.marker.remove();
+      userLocationRef.current.marker = null;
+    }
+
+    if (userLocationRef.current.circle) {
+      userLocationRef.current.circle.remove();
+      userLocationRef.current.circle = null;
+    }
+
+    setLocationEnabled(false);
   };
 
   // Update map with flights
@@ -148,6 +307,14 @@ const FlightMap: React.FC<FlightMapProps> = ({ flights, cityName, cityCoords }) 
       .bindPopup(`<b>${cityName}</b>`);
 
     mapInitializedRef.current = true;
+
+    // Auto-start location tracking if available
+    startLocationTracking();
+
+    // Cleanup on unmount
+    return () => {
+      stopLocationTracking();
+    };
   }, []);
 
   // Load flights once when city changes
@@ -159,8 +326,20 @@ const FlightMap: React.FC<FlightMapProps> = ({ flights, cityName, cityCoords }) 
     <div className="bg-white rounded-lg shadow-lg p-3 sm:p-4">
       <div className="mb-3 flex flex-col xs:flex-row items-start xs:items-center justify-between gap-2">
         <h2 className="text-lg sm:text-xl font-bold text-gray-800">Flight Map</h2>
-        <div className="text-xs sm:text-sm text-gray-600">
-          {flights.length} aircraft shown
+        <div className="flex items-center gap-3">
+          <button
+            onClick={locationEnabled ? stopLocationTracking : startLocationTracking}
+            className={`px-3 py-1.5 rounded-lg text-xs sm:text-sm font-medium transition-colors ${
+              locationEnabled 
+                ? 'bg-blue-500 text-white hover:bg-blue-600' 
+                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+            }`}
+          >
+            {locationEnabled ? '📍 Location On' : '📍 Show My Location'}
+          </button>
+          <div className="text-xs sm:text-sm text-gray-600">
+            {flights.length} aircraft
+          </div>
         </div>
       </div>
       
@@ -171,7 +350,7 @@ const FlightMap: React.FC<FlightMapProps> = ({ flights, cityName, cityCoords }) 
       />
       
       <p className="mt-3 text-xs sm:text-sm text-gray-600 text-center px-2">
-        🗺️ Click on any airplane to see details • Green lines show flight paths since page load • Zoom and pan freely
+        🗺️ Click on any airplane to see details • Green lines show flight paths • Blue marker shows your location {locationEnabled && '& direction'}
       </p>
     </div>
   );
