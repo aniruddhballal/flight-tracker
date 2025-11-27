@@ -1,12 +1,6 @@
 import React, { useState } from 'react';
-import { Plane, MapPin, Map } from 'lucide-react';
+import { Plane, MapPin, Search, Globe, Map } from 'lucide-react';
 import FlightMap from './FlightMap';
-
-interface CityCoordinates {
-  lat: number;
-  lon: number;
-  radius: number;
-}
 
 interface Flight {
   id: string;
@@ -20,56 +14,84 @@ interface Flight {
   onGround: boolean;
 }
 
-interface CityCoordinatesMap {
-  [key: string]: CityCoordinates;
-}
-
-const FlightTracker: React.FC = () => {
-  const [city, setCity] = useState<string>('');
+const GlobalFlightTracker: React.FC = () => {
+  const [searchQuery, setSearchQuery] = useState<string>('');
   const [flights, setFlights] = useState<Flight[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string>('');
-  const [searchedCity, setSearchedCity] = useState<string>('');
+  const [searchedLocation, setSearchedLocation] = useState<string>('');
+  const [currentCoords, setCurrentCoords] = useState<{ lat: number; lon: number }>({ lat: 0, lon: 0 });
+  const [searchRadius, setSearchRadius] = useState<number>(0.5);
   const [showMap, setShowMap] = useState<boolean>(false);
-  const [currentCityCoords, setCurrentCityCoords] = useState<{ lat: number; lon: number }>({ lat: 12.9716, lon: 77.5946 });
 
-  // Predefined coordinates for major Indian cities
-  const cityCoordinates: CityCoordinatesMap = {
-    'bangalore': { lat: 12.9716, lon: 77.5946, radius: 0.5 },
-    'bengaluru': { lat: 12.9716, lon: 77.5946, radius: 0.5 },
-    'mumbai': { lat: 19.0760, lon: 72.8777, radius: 0.5 },
-    'delhi': { lat: 28.7041, lon: 77.1025, radius: 0.5 },
-    'chennai': { lat: 13.0827, lon: 80.2707, radius: 0.5 },
-    'kolkata': { lat: 22.5726, lon: 88.3639, radius: 0.5 },
-    'hyderabad': { lat: 17.3850, lon: 78.4867, radius: 0.5 },
-    'pune': { lat: 18.5204, lon: 73.8567, radius: 0.5 },
-    'ahmedabad': { lat: 23.0225, lon: 72.5714, radius: 0.5 },
-    'kochi': { lat: 9.9312, lon: 76.2673, radius: 0.5 },
-    'goa': { lat: 15.2993, lon: 74.1240, radius: 0.5 },
+  const searchAirport = async (query: string): Promise<{ lat: number; lon: number; name: string; code: string } | null> => {
+    try {
+      // Try OpenStreetMap Nominatim API for airport search
+      const nominatimResponse = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query + ' airport')}&format=json&limit=1`,
+        { headers: { 'User-Agent': 'FlightTrackerApp/1.0' } }
+      );
+      
+      if (nominatimResponse.ok) {
+        const nominatimData = await nominatimResponse.json();
+        if (nominatimData.length > 0) {
+          return {
+            lat: parseFloat(nominatimData[0].lat),
+            lon: parseFloat(nominatimData[0].lon),
+            name: nominatimData[0].display_name.split(',')[0],
+            code: query.toUpperCase()
+          };
+        }
+      }
+
+      // If no airport found, try searching for the city itself
+      const cityResponse = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(query)}&format=json&limit=1`,
+        { headers: { 'User-Agent': 'FlightTrackerApp/1.0' } }
+      );
+      
+      if (cityResponse.ok) {
+        const cityData = await cityResponse.json();
+        if (cityData.length > 0) {
+          return {
+            lat: parseFloat(cityData[0].lat),
+            lon: parseFloat(cityData[0].lon),
+            name: cityData[0].display_name.split(',')[0],
+            code: query.toUpperCase()
+          };
+        }
+      }
+
+      return null;
+    } catch (err) {
+      console.error('Location search error:', err);
+      return null;
+    }
   };
 
-  const fetchFlights = async (cityName: string): Promise<void> => {
+  const fetchFlights = async (searchTerm: string): Promise<void> => {
     setLoading(true);
     setError('');
+    setFlights([]);
 
     try {
-      const normalizedCity = cityName.toLowerCase().trim();
-      const coords = cityCoordinates[normalizedCity];
+      const locationInfo = await searchAirport(searchTerm);
 
-      if (!coords) {
-        setError(`City "${cityName}" not found. Try: Bangalore, Mumbai, Delhi, Chennai, Kolkata, Hyderabad, Pune, Ahmedabad, Kochi, or Goa.`);
+      if (!locationInfo) {
+        setError(`Could not find location "${searchTerm}". Try using an airport code (e.g., JFK, LHR, BOM, CDG) or city name (e.g., New York, London, Mumbai).`);
         setLoading(false);
         return;
       }
 
-      setSearchedCity(cityName);
-      setCurrentCityCoords({ lat: coords.lat, lon: coords.lon });
+      setSearchedLocation(`${locationInfo.name}`);
+      setCurrentCoords({ lat: locationInfo.lat, lon: locationInfo.lon });
 
       // Calculate bounding box (approximately 0.5 degrees = ~55km radius)
-      const latMin = coords.lat - coords.radius;
-      const latMax = coords.lat + coords.radius;
-      const lonMin = coords.lon - coords.radius;
-      const lonMax = coords.lon + coords.radius;
+      const radius = searchRadius;
+      const latMin = locationInfo.lat - radius;
+      const latMax = locationInfo.lat + radius;
+      const lonMin = locationInfo.lon - radius;
+      const lonMax = locationInfo.lon + radius;
 
       const url = `https://opensky-network.org/api/states/all?lamin=${latMin}&lomin=${lonMin}&lamax=${latMax}&lomax=${lonMax}`;
       
@@ -82,7 +104,7 @@ const FlightTracker: React.FC = () => {
       const data = await response.json();
 
       if (!data.states || data.states.length === 0) {
-        setError(`No flights currently detected over ${cityName}. This could mean there are no aircraft in the area right now.`);
+        setError(`No flights currently detected near ${locationInfo.name}. This could mean there are no aircraft in the area right now, or try increasing the search radius.`);
         setLoading(false);
         return;
       }
@@ -98,7 +120,7 @@ const FlightTracker: React.FC = () => {
         velocity: state[9] ? `${Math.round(state[9] * 3.6)} km/h` : 'N/A',
         heading: state[10] ? `${Math.round(state[10])}°` : 'N/A',
         onGround: state[8],
-      })).filter((flight: Flight) => !flight.onGround); // Filter out grounded aircraft
+      })).filter((flight: Flight) => !flight.onGround);
 
       setFlights(formattedFlights);
       setError('');
@@ -111,8 +133,8 @@ const FlightTracker: React.FC = () => {
 
   const handleSubmit = (e?: React.MouseEvent | React.KeyboardEvent): void => {
     if (e) e.preventDefault();
-    if (city.trim()) {
-      fetchFlights(city);
+    if (searchQuery.trim()) {
+      fetchFlights(searchQuery);
     }
   };
 
@@ -122,24 +144,27 @@ const FlightTracker: React.FC = () => {
     }
   };
 
+  const quickSearches = ['JFK', 'LHR', 'CDG', 'DXB', 'BOM', 'DEL', 'HND', 'SIN', 'LAX', 'FRA'];
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 p-3 sm:p-6">
-      <div className="max-w-4xl mx-auto">
+      <div className="max-w-6xl mx-auto">
         <div className="bg-white rounded-lg shadow-lg p-4 sm:p-6 mb-4 sm:mb-6">
           <div className="flex items-center gap-3 mb-4 sm:mb-6">
-            <Plane className="w-6 h-6 sm:w-8 sm:h-8 text-indigo-600" />
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">Live Flight Tracker</h1>
+            <Globe className="w-6 h-6 sm:w-8 sm:h-8 text-indigo-600" />
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">Global Flight Tracker</h1>
           </div>
 
           <div className="flex flex-col sm:flex-row gap-3 mb-4">
-            <div className="flex-1">
+            <div className="flex-1 relative">
+              <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
               <input
                 type="text"
-                value={city}
-                onChange={(e) => setCity(e.target.value)}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyPress={handleKeyPress}
-                placeholder="Enter city name (e.g., Bangalore, Mumbai, Delhi)"
-                className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
+                placeholder="Enter airport code (JFK, LHR, BOM) or city name..."
+                className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-transparent outline-none"
               />
             </div>
             <button
@@ -151,12 +176,45 @@ const FlightTracker: React.FC = () => {
             </button>
           </div>
 
-          {searchedCity && (
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              Search Radius: {searchRadius === 0.5 ? '~55km' : searchRadius === 1.0 ? '~110km' : '~165km'}
+            </label>
+            <input
+              type="range"
+              min="0.5"
+              max="1.5"
+              step="0.5"
+              value={searchRadius}
+              onChange={(e) => setSearchRadius(parseFloat(e.target.value))}
+              className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer accent-indigo-600"
+            />
+          </div>
+
+          <div className="mb-4">
+            <p className="text-sm text-gray-600 mb-2">Quick search:</p>
+            <div className="flex flex-wrap gap-2">
+              {quickSearches.map((code) => (
+                <button
+                  key={code}
+                  onClick={() => {
+                    setSearchQuery(code);
+                    fetchFlights(code);
+                  }}
+                  className="px-3 py-1 text-sm bg-indigo-50 text-indigo-700 rounded-md hover:bg-indigo-100 transition-colors"
+                >
+                  {code}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {searchedLocation && (
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between bg-indigo-50 p-3 rounded-lg gap-3">
               <div className="flex items-center gap-2">
                 <MapPin className="w-5 h-5 text-indigo-600 flex-shrink-0" />
                 <span className="text-sm font-medium text-indigo-900">
-                  Tracking flights over {searchedCity}
+                  Tracking flights near {searchedLocation}
                 </span>
               </div>
               <div className="flex gap-2 w-full sm:w-auto">
@@ -243,18 +301,19 @@ const FlightTracker: React.FC = () => {
               latitude: parseFloat(f.latitude),
               heading: parseFloat(f.heading) || 0
             }))}
-            cityName={searchedCity}
-            cityCoords={currentCityCoords}
+            cityName={searchedLocation}
+            cityCoords={currentCoords}
           />
         )}
 
         <div className="mt-4 sm:mt-6 text-center text-xs sm:text-sm text-gray-600 px-2">
           <p>Data provided by OpenSky Network API</p>
-          <p className="mt-1">Supported cities: Bangalore, Mumbai, Delhi, Chennai, Kolkata, Hyderabad, Pune, Ahmedabad, Kochi, Goa</p>
+          <p className="mt-1">Search for any airport worldwide using airport codes (IATA/ICAO) or city names</p>
+          <p className="mt-1 text-xs">Examples: JFK (New York), LHR (London), BOM (Mumbai), CDG (Paris), DXB (Dubai)</p>
         </div>
       </div>
     </div>
   );
 };
 
-export default FlightTracker;
+export default GlobalFlightTracker;
