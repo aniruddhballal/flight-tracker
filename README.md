@@ -3,10 +3,10 @@
 A real-time flight tracking application built with React, TypeScript, and Vite.
 
 ## Features
-- 🛫 Track live flights over major Indian cities
-- 🗺️ Interactive map view with Leaflet
-- 📱 Mobile-friendly responsive design
-- ✈️ Real-time aircraft positions and details
+- Track live flights over major Indian cities
+- Interactive map view with Leaflet
+- Mobile-friendly responsive design
+- Real-time aircraft positions and details
 
 ## Tech Stack
 - React 18
