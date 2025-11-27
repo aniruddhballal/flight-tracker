@@ -132,8 +132,8 @@ const FlightMap: React.FC<FlightMapProps> = ({ flights, cityName, cityCoords }) 
       // iOS
       heading = webkitEvent.webkitCompassHeading;
     } else if (event.alpha !== null) {
-      // Android
-      heading = 360 - event.alpha;
+      // Android - use alpha directly without inverting
+      heading = event.alpha;
     }
 
     currentHeadingRef.current = heading;
